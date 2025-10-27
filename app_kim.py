@@ -3,7 +3,7 @@ import streamlit as st
 
 from langchain_openai import ChatOpenAI
 from langchain_classic.prompts import ChatPromptTemplate
-from langchain_classic.schema.runnable import RunnablePassthrough
+from langchain_classic.schema.runnable import RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -47,23 +47,42 @@ def get_rag_chain():
     rag_prompt = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
     
     def format_docs(docs):
-        return "\n\n".join(
-            f"--- (출처: {doc.metadata.get('source', 'N/A')}) ---\n" + doc.page_content
-            for doc in docs
-        )
+        formatted_strings = []
+        for doc in docs:
+            source = doc.metadata.get('source', 'N/A').split('/')[-1]
+            content_preview = doc.page_content[:300] + "..."
+            formatted_strings.append(f"--- [출처: {source}] ---\n{content_preview}")
+            
+        if not formatted_strings:
+            return "검색된 근거 문서가 없습니다."
+        
+        return "\n\n".join(formatted_strings)
     
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | rag_prompt
+    answer_chain = (
+        rag_prompt
         | llm
         | StrOutputParser()
     )
-    return rag_chain
+    
+    context_chain = retriever | format_docs
+    
+    rag_chain_with_source = RunnableParallel(
+        context=context_chain,
+        question=RunnablePassthrough(),
+        
+        answer=RunnableParallel(
+            context=context_chain,
+            question=RunnablePassthrough(),
+        ) | answer_chain
+    )
+
+    return rag_chain_with_source
 
 
-st.set_page_config(page_title="Pandas 2.3 & Scikit-Learn 1.7.2 RAG 챗봇")
-st.title("Pandas & Scikit-Learn\n공식 문서 기반 어시스턴트")
-st.caption("Pandas, Scikit-Learn에 관련된 것은 무엇이든 물어보세요!")
+
+st.set_page_config(page_title="Pandas & Scikit-Learn RAG 챗봇")
+st.title("Pandas & Scikit-Learn 공식 문서 어시스턴트")
+st.caption("공식 문서를 기반으로 질문에 답변합니다.")
 
 try:
     rag_chain = get_rag_chain()
@@ -74,16 +93,22 @@ except Exception as e:
 # 1. 채팅 기록 초기화 (Session State)
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "안녕하세요! Pandas & Scikit-Learn 공식 문서에 기반하여 질문에 답변해 드립니다."}
+        {"role": "assistant", "content": "안녕하세요! Pandas와 Scikit-Learn에 대해 무엇이든 물어보세요."}
     ]
+
 
 # 2. 이전 채팅 기록 표시
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        
+        if message["role"] == "assistant" and "context" in message:
+            with st.expander("답변 근거 보기 (출처 문서)"):
+                st.markdown(message["context"])
+
 
 # 3. 사용자 입력 받기 (chat_input)
-if prompt := st.chat_input("Pandas, Scikit-Learn에 대해 질문하세요..."):
+if prompt := st.chat_input("Pandas와 Scikit-Learn에 대해 질문하세요..."):
     # 3-1. 사용자 메시지를 채팅 기록에 추가하고 화면에 표시
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -91,16 +116,21 @@ if prompt := st.chat_input("Pandas, Scikit-Learn에 대해 질문하세요..."):
 
     # 3-2. RAG Chain을 실행하여 답변 생성
     with st.chat_message("assistant"):
-        with st.spinner("Pandas, Scikit-Learn 문서를 검색하고 답변을 생성 중입니다..."):
+        with st.spinner("공식 문서를 검색하고 답변을 생성 중입니다...") as spinner:
             try:
-                # [핵심] RAG Chain 실행!
-                response = rag_chain.invoke(prompt)
+                response_dict = rag_chain.invoke(prompt)
                 
-                # (팁) 답변과 함께 근거 문서를 보여주면 신뢰도가 올라갑니다.
-                # response_with_source = f"{response}\n\n**[답변 근거]**\n(근거 문서는 `rag_chain`을 수정하여 `context`를 함께 반환하도록 해야 합니다.)"
+                final_answer = response_dict.get("answer", "오류: 답변을 생성하지 못했습니다.")
+                retrieved_context = response_dict.get("context", "오류: 근거 문서를 찾지 못했습니다.")            
                 
-                st.markdown(response)
-                # 채팅 기록에 AI 답변 추가
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                st.markdown(final_answer)
+                
+                with st.expander("답변 근거 보기 (출처 문서)"):
+                    st.markdown(retrieved_context)
+                
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": final_answer, "context": retrieved_context}
+                    )
+            
             except Exception as e:
                 st.error(f"답변 생성 중 오류 발생: {e}")
