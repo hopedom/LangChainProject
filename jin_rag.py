@@ -14,7 +14,7 @@ if not api_key:
     st.error("OPENAI_API_KEY가 설정되어 있지 않습니다. 환경변수 또는 Streamlit secrets에 추가하세요.")
 os.environ["OPENAI_API_KEY"] = api_key
 
-# Chroma DB 경로들 (data_create_n.py에서 생성한 경로와 일치)
+# Chroma DB 경로들 (jin_data.py에서 생성한 경로와 일치)
 PANDAS_CHROMA_DIR = "./chromadb/pandas_rst"
 SKLEARN_CHROMA_DIR = "./chromadb/sklearn_rst"
 BOTH_CHROMA_DIR = "./chromadb/both_rst"
